@@ -1,4 +1,17 @@
 import subprocess
+import math
+import argparse
+import platform
+
+parser = argparse.ArgumentParser(description="Generate a Fibonacci spiral")
+
+parser.add_argument('-l','--lua',help="Use lualatex to compile document", action="store_true")
+parser.add_argument('-x','--xe',help="Use xelatex to compile document", action="store_true")
+parser.add_argument('-v','--view',help="View PDF afterwards", action="store_true")
+parser.add_argument('-t','--tikz',help="Create TikZ code", action="store_true")
+parser.add_argument('-s','--svg',help="Create SVG code", action="store_true")
+
+args = parser.parse_args()
 
 SCALE = 1
 PHI = 0.5*(5**0.5-1) # scale factor
@@ -7,57 +20,108 @@ D = 144 # angle (in degrees) for each arc
 R = 5. # radius of largest circle
 SA = 30 # start angle
 
+# Set TeX engine
+TEX = "pdflatex"
+if args.lua:
+    TEX = "lualatex"
+if args.xe:
+    TEX = "xelatex"
+
+# If requested, how to view the PDF afterwards
+SHOW = args.view
+
+if platform.system() == "Linux":
+    OPEN = "xdg-open" # Linux
+elif platform.system() == "Darwin":
+    OPEN = "open" # Mac OS
+else:
+    OPEN = "" # Dunno what to do for Windows
+    SHOW = False
+
+if args.svg:
+    R *= 10
+    TIKZ = False
+    curve_start = r'<path d="'
+    curve_end = r'" stroke="black" fill="none" />'
+    picture_start = ""
+    picture_end = ""
+    preamble = r"""<?xml version="1.0" standalone="no"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTDSVG1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<svg xmlns="http://www.w3.org/2000/svg" version="1.1" viewBox="-150 -150 300 300" width="100%" height="100%">
+"""
+    postamble = r"</svg>"
+    move = lambda x,y: f"M {x:.2f} {y:.2f} "
+    arc = lambda r,a,D,d,x,y: f"A {r:.2f} {r:.2f} 0 0 {int((d+1)/2)} {x:.2f} {y:.2f} "
+else:
+    TIKZ = True
+    curve_start = r"\draw[color=black] "
+    curve_end = r";"
+    picture_start = "\\begin{tikzpicture}[x=" +  f"{SCALE}cm, y={SCALE}cm]\n"
+    picture_end = "\n\\end{tikzpicture}\n\n"
+    preamble = r"""\documentclass[border=10pt,tikz]{standalone}
+\begin{document}
+
+"""
+    postamble = r"\end{document}"
+    move = lambda x,y: f"({x},{y}) "
+    arc = lambda r,a,D,d,x,y: f"arc[radius={r}, start angle={a}, delta angle={D*d}] "
+
 # this is a bit wasteful, but I think a simple thing that works is probably better than a complicated calculation. 
 def curve(n):
     """Plot a curve that goes in different directions depending on the binary expansion of the argument"""
     r = R
-    b = bin(n)[2:] # chop off the 0b at the beginning
-    while len(b)<LEN:
-        b = "0" + b # make sure the binary numbers are all the same length
-
     a = SA
-
-    direction = +1 
-    out = "\draw[color=black] (0,0) "
-    for bi in b:
-        if bi == '0':
-            out += f"arc ({a}:{a+D*direction}:{r}) " # continue in the same direction
-            a = (a+D*direction) % 360
-        else:
+    direction = +1
+    out = curve_start
+    x = 0
+    y = 0
+    if n == 0:
+        out += move(0,0)
+    
+    for i in range(LEN):
+        if n%2 == 1:
             direction *= -1
             a = (a+180) % 360 # switch direction and reduce radius
             r *= PHI
-            out += f"arc ({a}:{a+direction*D}:{r}) "
-            a = (a+direction*D) % 360
+        if n == 1: # are we ready to start drawing?
+            out += move(x,y)
+        # update starting point of next maybe-arc
+        x += -r*math.cos(a * math.pi/180) + r*math.cos( (a + D*direction) * math.pi/180)
+        y += -r*math.sin(a * math.pi/180) + r*math.sin( (a + D*direction) * math.pi/180)
+        if n <= 1: # are we drawing?
+            out += arc(r,a,D,direction,x,y)
+        a = (a+direction*D) % 360
         r *= PHI # reduce radius
-    return out + ";"
+        n >>= 1
+    return out + curve_end
 
 def curves():
     """plot all of the possible curves"""
     return "\n".join([curve(i) for i in range(2**LEN)])
 
 def full_file():
-    """Really hacky latex/tikz file."""
-    out = r"""\documentclass[12pt,a4paper,oneside,landscape]{report}
-\usepackage{tikz}
-\usepackage[margin=0.5in,paper=a4paper]{geometry}
-\begin{document}
-
-"""
+    """Use standalone class for single-image documents."""
+    out = preamble
 
     for f in [curves]:
-        out += "\\begin{tikzpicture}[x=" +  f"{SCALE}cm, y={SCALE}cm]\n" + f() + "\n\\end{tikzpicture}\n\n"
-    out += r"\end{document}"
+        out += picture_start + f() + picture_end
+    out += postamble
     return out
     
 fn = "fibo"
-tfn =   fn + ".tex"
-ofn = fn + ".pdf"
+if TIKZ:
+    tfn =   fn + ".tex"
+    ofn = fn + ".pdf"
+else:
+    tfn =   fn + ".svg"
+    ofn = tfn
+    
 with open(tfn,'w') as f:
     f.write(full_file())
 
 # compile it
 
-
-subprocess.call(f"pdflatex {tfn} -o {ofn}", shell =True, executable = '/bin/zsh')
-subprocess.call(f"open {ofn}",shell =True, executable = '/bin/zsh')
+if TIKZ:
+    subprocess.call(f"{TEX} {tfn} -o {ofn}", shell =True, executable = '/bin/zsh')
+if SHOW:
+    subprocess.call(f"{OPEN} {ofn}",shell =True, executable = '/bin/zsh')
